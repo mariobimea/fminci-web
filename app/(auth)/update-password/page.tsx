@@ -26,88 +26,66 @@ function UpdatePasswordContent() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    let subscription: { unsubscribe: () => void } | null = null;
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    let resolved = false;
-
     const handleRecovery = async () => {
-      // 1. Comprobar si Supabase devolvió un error en la URL (ej: otp_expired)
-      const errorParam = searchParams.get('error_description');
-      if (errorParam) {
-        const errorMsg = errorParam.replace(/\+/g, ' ');
-        if (errorMsg.includes('expired')) {
-          setErr('El enlace ha expirado. Solicite un nuevo enlace de recuperación.');
-        } else {
-          setErr('El enlace no es válido. Solicite un nuevo enlace de recuperación.');
+      try {
+        // 1. Comprobar si Supabase devolvió un error en la URL (ej: otp_expired)
+        const errorParam = searchParams.get('error_description');
+        if (errorParam) {
+          const errorMsg = errorParam.replace(/\+/g, ' ');
+          if (errorMsg.includes('expired')) {
+            setErr('El enlace ha expirado. Solicite un nuevo enlace de recuperación.');
+          } else {
+            setErr('El enlace no es válido. Solicite un nuevo enlace de recuperación.');
+          }
+          return;
         }
-        setChecking(false);
-        return;
-      }
 
-      // 2. Path principal: token_hash directo (funciona desde cualquier dispositivo)
-      const tokenHash = searchParams.get('token_hash');
-      const type = searchParams.get('type');
-      if (tokenHash && type === 'recovery') {
-        const { error } = await supabase.auth.verifyOtp({
-          token_hash: tokenHash,
-          type: 'recovery',
-        });
-        if (error) {
-          setErr('El enlace ha expirado o ya fue utilizado. Solicite un nuevo enlace de recuperación.');
-        } else {
-          setValidToken(true);
+        // 2. Path principal: token_hash directo (funciona desde cualquier dispositivo)
+        const tokenHash = searchParams.get('token_hash');
+        const type = searchParams.get('type');
+        if (tokenHash && type === 'recovery') {
+          const { error } = await supabase.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: 'recovery',
+          });
+          if (error) {
+            setErr('El enlace ha expirado o ya fue utilizado. Solicite un nuevo enlace de recuperación.');
+          } else {
+            setValidToken(true);
+          }
+          return;
         }
-        setChecking(false);
-        return;
-      }
 
-      // 3. Sin code ni token_hash: enlace inválido
-      if (!searchParams.get('code')) {
+        // 3. Flujo PKCE: ?code= presente
+        const code = searchParams.get('code');
+        if (code) {
+          // Primero comprobar si detectSessionInUrl ya procesó el code
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            setValidToken(true);
+            return;
+          }
+
+          // Si no hay sesión, intentar exchange manual
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) {
+            setErr('El enlace ha expirado o no es válido. Solicite un nuevo enlace de recuperación.');
+          } else {
+            setValidToken(true);
+          }
+          return;
+        }
+
+        // 4. Sin code ni token_hash: enlace inválido
         setErr('Enlace inválido o expirado. Solicite un nuevo enlace de recuperación.');
+      } catch {
+        setErr('Error al verificar el enlace. Solicite un nuevo enlace de recuperación.');
+      } finally {
         setChecking(false);
-        return;
       }
-
-      // 4. Fallback PKCE: ?code= presente, esperar a que detectSessionInUrl lo procese
-      const authListener = supabase.auth.onAuthStateChange((event, session) => {
-        if (resolved) return;
-        if (event === 'SIGNED_IN' && session) {
-          resolved = true;
-          if (timeout) clearTimeout(timeout);
-          setValidToken(true);
-          setChecking(false);
-        }
-      });
-      subscription = authListener.data.subscription;
-
-      // Comprobar si ya hay sesión
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session && !resolved) {
-        resolved = true;
-        setValidToken(true);
-        setChecking(false);
-        subscription.unsubscribe();
-        return;
-      }
-
-      // Timeout de 5s: si no se resuelve, el code_verifier no existe en este navegador
-      timeout = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          setErr('No se pudo verificar el enlace. Abra el enlace en el mismo dispositivo donde solicitó el restablecimiento, o solicite uno nuevo.');
-          setChecking(false);
-          subscription?.unsubscribe();
-        }
-      }, 5000);
     };
 
     handleRecovery();
-
-    return () => {
-      resolved = true;
-      subscription?.unsubscribe();
-      if (timeout) clearTimeout(timeout);
-    };
   }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
