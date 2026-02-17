@@ -26,47 +26,64 @@ function UpdatePasswordContent() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    // Comprobar si Supabase devolvió un error en la URL (ej: otp_expired)
-    const errorParam = searchParams.get('error_description');
-    if (errorParam) {
-      const errorMsg = errorParam.replace(/\+/g, ' ');
-      if (errorMsg.includes('expired')) {
-        setErr('El enlace ha expirado. Solicite un nuevo enlace de recuperación.');
-      } else {
-        setErr('El enlace no es válido. Solicite un nuevo enlace de recuperación.');
-      }
-      setChecking(false);
-      return;
-    }
-
-    // detectSessionInUrl: true se encarga de intercambiar el ?code= automáticamente.
-    // Solo necesitamos escuchar cuándo la sesión está lista.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session) {
-        setValidToken(true);
+    const handleRecovery = async () => {
+      // Comprobar si Supabase devolvió un error en la URL (ej: otp_expired)
+      const errorParam = searchParams.get('error_description');
+      if (errorParam) {
+        const errorMsg = errorParam.replace(/\+/g, ' ');
+        if (errorMsg.includes('expired')) {
+          setErr('El enlace ha expirado. Solicite un nuevo enlace de recuperación.');
+        } else {
+          setErr('El enlace no es válido. Solicite un nuevo enlace de recuperación.');
+        }
         setChecking(false);
+        return;
       }
-    });
 
-    // Comprobar si ya hay sesión (el code ya fue procesado por el cliente)
-    const checkSession = async () => {
+      // Path principal: token_hash directo (funciona desde cualquier dispositivo/navegador)
+      const tokenHash = searchParams.get('token_hash');
+      const type = searchParams.get('type');
+      if (tokenHash && type === 'recovery') {
+        const { error } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: 'recovery',
+        });
+        if (error) {
+          setErr('El enlace ha expirado o ya fue utilizado. Solicite un nuevo enlace de recuperación.');
+        } else {
+          setValidToken(true);
+        }
+        setChecking(false);
+        return;
+      }
+
+      // Fallback: flujo PKCE con ?code= (funciona solo en el mismo navegador)
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          setValidToken(true);
+          setChecking(false);
+        }
+      });
+
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         setValidToken(true);
         setChecking(false);
-      } else if (!searchParams.get('code')) {
-        // No hay sesión ni code pendiente: enlace inválido
+        subscription.unsubscribe();
+        return;
+      }
+
+      if (!searchParams.get('code')) {
         setErr('Enlace inválido o expirado. Solicite un nuevo enlace de recuperación.');
         setChecking(false);
+        subscription.unsubscribe();
       }
-      // Si hay ?code= pero no hay sesión aún, onAuthStateChange lo capturará
+
+      // Cleanup del listener si el componente se desmonta
+      return () => subscription.unsubscribe();
     };
 
-    checkSession();
-
-    return () => {
-      subscription.unsubscribe();
-    };
+    handleRecovery();
   }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
