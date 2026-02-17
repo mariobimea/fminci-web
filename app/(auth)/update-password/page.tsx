@@ -26,8 +26,12 @@ function UpdatePasswordContent() {
   const searchParams = useSearchParams();
 
   useEffect(() => {
+    let subscription: { unsubscribe: () => void } | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    let resolved = false;
+
     const handleRecovery = async () => {
-      // Comprobar si Supabase devolvió un error en la URL (ej: otp_expired)
+      // 1. Comprobar si Supabase devolvió un error en la URL (ej: otp_expired)
       const errorParam = searchParams.get('error_description');
       if (errorParam) {
         const errorMsg = errorParam.replace(/\+/g, ' ');
@@ -40,7 +44,7 @@ function UpdatePasswordContent() {
         return;
       }
 
-      // Path principal: token_hash directo (funciona desde cualquier dispositivo/navegador)
+      // 2. Path principal: token_hash directo (funciona desde cualquier dispositivo)
       const tokenHash = searchParams.get('token_hash');
       const type = searchParams.get('type');
       if (tokenHash && type === 'recovery') {
@@ -57,33 +61,53 @@ function UpdatePasswordContent() {
         return;
       }
 
-      // Fallback: flujo PKCE con ?code= (funciona solo en el mismo navegador)
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // 3. Sin code ni token_hash: enlace inválido
+      if (!searchParams.get('code')) {
+        setErr('Enlace inválido o expirado. Solicite un nuevo enlace de recuperación.');
+        setChecking(false);
+        return;
+      }
+
+      // 4. Fallback PKCE: ?code= presente, esperar a que detectSessionInUrl lo procese
+      const authListener = supabase.auth.onAuthStateChange((event, session) => {
+        if (resolved) return;
         if (event === 'SIGNED_IN' && session) {
+          resolved = true;
+          if (timeout) clearTimeout(timeout);
           setValidToken(true);
           setChecking(false);
         }
       });
+      subscription = authListener.data.subscription;
 
+      // Comprobar si ya hay sesión
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
+      if (session && !resolved) {
+        resolved = true;
         setValidToken(true);
         setChecking(false);
         subscription.unsubscribe();
         return;
       }
 
-      if (!searchParams.get('code')) {
-        setErr('Enlace inválido o expirado. Solicite un nuevo enlace de recuperación.');
-        setChecking(false);
-        subscription.unsubscribe();
-      }
-
-      // Cleanup del listener si el componente se desmonta
-      return () => subscription.unsubscribe();
+      // Timeout de 5s: si no se resuelve, el code_verifier no existe en este navegador
+      timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          setErr('No se pudo verificar el enlace. Abra el enlace en el mismo dispositivo donde solicitó el restablecimiento, o solicite uno nuevo.');
+          setChecking(false);
+          subscription?.unsubscribe();
+        }
+      }, 5000);
     };
 
     handleRecovery();
+
+    return () => {
+      resolved = true;
+      subscription?.unsubscribe();
+      if (timeout) clearTimeout(timeout);
+    };
   }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
