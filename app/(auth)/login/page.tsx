@@ -92,7 +92,7 @@ export default function LoginPage() {
 
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: 'https://www.fminci.com/update-password',
+        redirectTo: `${window.location.origin}/update-password`,
       });
 
       if (error) {

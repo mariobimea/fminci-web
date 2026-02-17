@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import Image from "next/image";
 import { PALETA } from "@/lib/theme";
@@ -13,50 +13,42 @@ export default function UpdatePassword() {
   const [ok, setOk] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [validToken, setValidToken] = useState(false);
+  const [checking, setChecking] = useState(true);
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
-    // Verificar si hay un token de recuperación en la URL
     const checkRecoveryToken = async () => {
-      // Obtener parámetros del hash de la URL
-      const hash = window.location.hash.substring(1);
-      console.log('Hash completo:', hash);
+      try {
+        // Flujo PKCE: Supabase redirige con ?code=XXX tras verificar el token
+        const code = searchParams.get('code');
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) {
+            setErr('El enlace ha expirado o ya fue utilizado. Solicite un nuevo enlace de recuperación.');
+          } else {
+            setValidToken(true);
+          }
+          setChecking(false);
+          return;
+        }
 
-      const hashParams = new URLSearchParams(hash);
-      const accessToken = hashParams.get('access_token');
-      const type = hashParams.get('type');
-      const errorDescription = hashParams.get('error_description');
-
-      console.log('Access token:', accessToken ? 'Presente' : 'No presente');
-      console.log('Type:', type);
-      console.log('Error:', errorDescription);
-
-      if (errorDescription) {
-        setErr('El enlace ha expirado o ya fue utilizado. Si recibió varios emails, use el más reciente.');
-        return;
-      }
-
-      if (accessToken && type === 'recovery') {
-        // Token de recuperación encontrado en la URL - validar con Supabase
-        console.log('Token de recuperación detectado, estableciendo sesión...');
-        setValidToken(true);
-        return;
-      }
-
-      // Si no hay token en la URL, verificar si ya tiene sesión
-      const { data: { session } } = await supabase.auth.getSession();
-      console.log('Sesión actual:', session ? 'Existe' : 'No existe');
-
-      if (session) {
-        // Si tiene sesión, permitir que continúe para cambiar la contraseña
-        setValidToken(true);
-      } else {
-        setErr('Enlace inválido o expirado. Por favor, solicita un nuevo enlace de recuperación.');
+        // Fallback: verificar si ya tiene sesión activa (por si detectSessionInUrl ya procesó el code)
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          setValidToken(true);
+        } else {
+          setErr('Enlace inválido o expirado. Solicite un nuevo enlace de recuperación.');
+        }
+      } catch {
+        setErr('Error al verificar el enlace. Solicite un nuevo enlace de recuperación.');
+      } finally {
+        setChecking(false);
       }
     };
 
     checkRecoveryToken();
-  }, []);
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,7 +159,13 @@ export default function UpdatePassword() {
               Crea tu nueva contraseña segura
             </p>
 
-            {!validToken ? (
+            {checking ? (
+              <div className="text-center py-8">
+                <p style={{ color: PALETA.bg, fontFamily: 'Montserrat, Poppins, sans-serif' }}>
+                  Verificando enlace...
+                </p>
+              </div>
+            ) : !validToken ? (
               <div className="text-center">
                 <div className="text-sm text-red-600 bg-red-50 p-4 rounded border-l-4 border-red-400 mb-4">
                   {err}
