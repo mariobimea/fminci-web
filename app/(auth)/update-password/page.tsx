@@ -1,12 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import Image from "next/image";
 import { PALETA } from "@/lib/theme";
 
 export default function UpdatePassword() {
+  return (
+    <Suspense>
+      <UpdatePasswordContent />
+    </Suspense>
+  );
+}
+
+function UpdatePasswordContent() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
